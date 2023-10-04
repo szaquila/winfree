@@ -1,7 +1,14 @@
 use dioxus::prelude::*;
 use dioxus_desktop::{Config, LogicalSize, WindowBuilder};
-use std::fmt;
-use windows::{Win32::Foundation::*, Win32::UI::WindowsAndMessaging::*};
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
+use std::ptr::null_mut;
+use std::{fmt, mem};
+// use windows::Win32::{ Foundation::*, System::ProcessStatus::*, System::Threading::*, UI::WindowsAndMessaging::* };
+use winapi::{
+    shared::{minwindef::*, ntdef::*, windef::*},
+    um::{processthreadsapi, psapi, winnt, winuser},
+};
 
 #[derive(Debug)]
 struct Item {
@@ -11,14 +18,15 @@ struct Item {
     width: i32,
     height: i32,
     title: String,
+    name: String,
 }
 
 impl fmt::Display for Item {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:<8} ({:>4}, {:>4}, {:>4}, {:>4}) {:40}",
-            self.hwnd, self.left, self.top, self.width, self.height, self.title,
+            "{:<8} ({:>4}, {:>4}, {:>4}, {:>4}) {:40} {:40}",
+            self.hwnd, self.left, self.top, self.width, self.height, self.title, self.name
         )
     }
 }
@@ -26,6 +34,7 @@ impl fmt::Display for Item {
 static mut LIST: Vec<Item> = Vec::new();
 static mut CX: i32 = 0;
 static mut CY: i32 = 0;
+const LEN: usize = 1024;
 
 fn main() {
     dioxus_desktop::launch_cfg(
@@ -45,11 +54,11 @@ fn app(cx: Scope) -> Element {
         // 我们将窗口设置为无边框的，然后我们可以自己实现标题栏。
         // win.set_decorations(false);
 
-        CX = GetSystemMetrics(SM_CXSCREEN);
-        CY = GetSystemMetrics(SM_CYSCREEN);
+        CX = winuser::GetSystemMetrics(winuser::SM_CXSCREEN);
+        CY = winuser::GetSystemMetrics(winuser::SM_CYSCREEN);
 
         LIST.clear();
-        let _ = EnumWindows(Some(enum_window), LPARAM(0));
+        let _ = winuser::EnumWindows(Some(enum_window), 0 as LPARAM);
         // println!("{:?}", LIST);
 
         let hwnd = use_state(&cx, || "0".to_string());
@@ -67,9 +76,10 @@ fn app(cx: Scope) -> Element {
 						width.set(x.1.width.to_string());
 						height.set(x.1.height.to_string());
 					},
-                    td { style: "width: 60px;", x.1.hwnd.to_string() }
-                    td { style: "width: 80px;", x.1.left.to_string(), ",", x.1.top.to_string(), ",", x.1.width.to_string(), ",", x.1.height.to_string() }
-                    td { style: "width: 200px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;", x.1.title.to_string() }
+                    td { style: "width: 12%;", x.1.hwnd.to_string() }
+                    td { style: "width: 24%;", x.1.left.to_string(), ",", x.1.top.to_string(), ",", x.1.width.to_string(), ",", x.1.height.to_string() }
+                    td { style: "width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", x.1.title.to_string() }
+                    td { style: "width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", x.1.name.to_string() }
                 }
             }
         });
@@ -97,22 +107,24 @@ fn app(cx: Scope) -> Element {
             // }
 			style { include_str!("./style.css") }
 			div {
-				style: "width: 98%; height: 30px;display: inline-block; white-space: nowrap; display: flex; justify-content: center; align-items: center;",
+				style: "width: 100%; height: 30px;display: inline-block; white-space: nowrap; display: flex; justify-content: center; align-items: center;",
 				input { style: "width: 22%;", placeholder: "左", value: "{left}", oninput: |evt| left.set(evt.value.clone()), }
 				input { style: "width: 22%;", placeholder: "上", value: "{top}", oninput: |evt| top.set(evt.value.clone()),  }
 				input { style: "width: 22%;", placeholder: "宽", value: "{width}", oninput: |evt| width.set(evt.value.clone()),  }
 				input { style: "width: 22%;", placeholder: "高", value: "{height}", oninput: |evt| height.set(evt.value.clone()),  }
 				button { onclick: move |_| {
 					println!("当前值: {left} {top} {width} {height}");
-					let _ = MoveWindow(HWND(hwnd.parse::<isize>().unwrap()), left.parse::<i32>().unwrap(), top.parse::<i32>().unwrap(), width.parse::<i32>().unwrap(), height.parse::<i32>().unwrap(), true);
+					let _ = winuser::MoveWindow(hwnd.parse::<isize>().unwrap() as HWND, left.parse::<i32>().unwrap(), top.parse::<i32>().unwrap(), width.parse::<i32>().unwrap(), height.parse::<i32>().unwrap(), 1);
 				}, "确定" }
 			}
             div {
                 table {
+					style: "width: 100%",
 					tr {
-						td { style: "width: 60px;", "句柄" }
-						td { style: "width: 80px;", "位置"}
-						td { style: "width: 200px;", "标题"}
+						td { style: "width: 12%;", "句柄" }
+						td { style: "width: 24%;", "位置"}
+						td { style: "width: 30%;", "标题"}
+						td { style: "width: 24%;", "路径"}
 					}
 					items
                 }
@@ -121,20 +133,16 @@ fn app(cx: Scope) -> Element {
     }
 }
 
-unsafe extern "system" fn enum_window(window: HWND, _: LPARAM) -> BOOL {
+unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
     unsafe {
-        let mut text: [u16; 512] = [0; 512];
-        let len = GetWindowTextW(window, &mut text);
-        let text = String::from_utf16_lossy(&text[..len as usize]);
+        let text = GetWindowTextW(hwnd);
+        // let text = String::from_utf16_lossy(&text[..len as usize]);
 
-        let mut info = WINDOWINFO {
-            cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
-            ..Default::default()
-        };
-        GetWindowInfo(window, &mut info).unwrap();
+        let info = GetWindowInfo(hwnd);
 
         if !text.is_empty()
-            && info.dwStyle.contains(WS_VISIBLE)
+            // && info.dwStyle.contains(winuser::WS_VISIBLE)
+			&& (info.dwStyle & winuser::WS_VISIBLE) > 0
             && !(info.rcWindow.left == 0 && (info.rcWindow.right - info.rcWindow.left) == CX)
         {
             // println!(
@@ -146,16 +154,110 @@ unsafe extern "system" fn enum_window(window: HWND, _: LPARAM) -> BOOL {
             //     info.rcWindow.bottom - info.rcWindow.top,
             //     text.clone(),
             // );
+
+            let (_, proc_id) = GetWindowThreadProcessId(hwnd);
+            let h_process = OpenProcess(
+                winnt::PROCESS_TERMINATE | winnt::PROCESS_QUERY_INFORMATION,
+                0,
+                proc_id,
+            );
+            let image_file_name = GetModuleFileNameExW(h_process);
+
             LIST.push(Item {
-                hwnd: window.0 as usize as i32,
+                hwnd: hwnd as usize as i32,
                 left: info.rcWindow.left,
                 top: info.rcWindow.top,
                 width: info.rcWindow.right - info.rcWindow.left,
                 height: info.rcWindow.bottom - info.rcWindow.top,
-                title: text.into(),
+                title: text.into_string().unwrap(),
+                name: image_file_name.into_string().unwrap(),
             });
         }
 
         true.into()
     }
+}
+
+fn slice_to_os_string_trancate_nul(text: &[u16]) -> OsString {
+    if let Some(new_len) = text.iter().position(|x| *x == 0) {
+        OsString::from_wide(&text[0..new_len])
+    } else {
+        OsString::from_wide(&text)
+    }
+}
+
+///
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn GetForegroundWindow() -> HWND {
+    unsafe { winuser::GetForegroundWindow() }
+}
+
+/// returns `OsString`, nul char is truncated.
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn GetWindowTextW(hwnd: HWND) -> OsString {
+    let text_len = unsafe { winuser::GetWindowTextLengthW(hwnd) };
+    // println!("text_len: {}", text_len);
+
+    let mut text = vec![0u16; (text_len + 1) as usize];
+    unsafe {
+        winuser::GetWindowTextW(hwnd, text.as_mut_ptr(), text_len + 1);
+    }
+    slice_to_os_string_trancate_nul(&text)
+}
+
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn GetWindowInfo(hwnd: HWND) -> winuser::WINDOWINFO {
+    let mut info: winuser::WINDOWINFO = unsafe { mem::zeroed() };
+    let _ok = unsafe { winuser::GetWindowInfo(hwnd, &mut info) };
+    info
+}
+
+/// returns `(thread_id, proc_id)`
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn GetWindowThreadProcessId(hwnd: HWND) -> (DWORD, DWORD) {
+    let mut proc_id: DWORD = 0;
+    let thread_id = unsafe { winuser::GetWindowThreadProcessId(hwnd, &mut proc_id) };
+    (thread_id, proc_id)
+}
+
+/// returns process handle.
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn OpenProcess(dwDesiredAccess: DWORD, bInheritHandle: BOOL, dwProcessId: DWORD) -> HANDLE {
+    unsafe { processthreadsapi::OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId) }
+}
+
+/// returns `OsString`, nul char is truncated.
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn GetProcessImageFileNameW(hProcess: HANDLE) -> OsString {
+    let mut image_file_name = vec![0u16; LEN];
+    let _ = unsafe {
+        psapi::GetProcessImageFileNameW(
+            hProcess,
+            image_file_name.as_mut_ptr(),
+            image_file_name.len() as u32,
+        )
+    };
+    slice_to_os_string_trancate_nul(&image_file_name)
+}
+
+/// returns `OsString`, nul char is truncated.
+#[allow(dead_code)]
+#[allow(non_snake_case)]
+fn GetModuleFileNameExW(hProcess: HANDLE) -> OsString {
+    let mut image_file_name = vec![0u16; LEN];
+    let _ = unsafe {
+        psapi::GetModuleFileNameExW(
+            hProcess,
+            null_mut(),
+            image_file_name.as_mut_ptr(),
+            image_file_name.len() as u32,
+        )
+    };
+    slice_to_os_string_trancate_nul(&image_file_name)
 }

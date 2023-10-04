@@ -1,14 +1,16 @@
-
+body {
+	margin: 5px;
+	padding: 5px;
+	display: block;
+	height: 430px;
+	overflow-x: hidden;
+	overflow-y: auto;
+}
 table {
 	table-layout: fixed;
 	border-collapse: collapse;
 	border-spacing: 0;
 	border: 1px solid;
-	width: 98%;
-	height: 430px;
-	display: block;
-	overflow-x: hidden;
-	overflow-y: auto;
 }
 tr:nth-child(odd) {
 	background: #f1f1f1;
@@ -17,7 +19,7 @@ tr:hover {
 	background-color: yellow;
 }
 tr:nth-child(1) {
-	background: #6495ED;
+	background: #6495ed;
 	text-align: center;
 	color: white;
 }
