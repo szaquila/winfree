@@ -8,6 +8,8 @@ edition = "2021"
 [dependencies]
 dioxus = "0.4.0"
 dioxus-desktop = "0.4.0"
+serde = "1.0.188"
+serde_json = "1.0.107"
 tokio = { version = "1.32.0", features = ["full"] }
 winapi = { version = "0.3.9", features = ["winuser", "psapi"] }
 # windows = { version = "0.51.1", features = [ "Win32_Foundation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_WindowsAndMessaging"] }

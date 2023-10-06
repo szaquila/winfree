@@ -1,28 +1,28 @@
 use dioxus::prelude::*;
 use dioxus_desktop::{Config, LogicalSize, WindowBuilder};
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
-use std::ptr::null_mut;
-use std::{fmt, mem};
+use std::{ffi::OsString, fmt, mem, os::windows::ffi::OsStringExt, ptr::null_mut};
 // use windows::Win32::{ Foundation::*, System::ProcessStatus::*, System::Threading::*, UI::WindowsAndMessaging::* };
+use fmt::{Display, Formatter, Result};
+use serde::{Deserialize, Serialize};
 use winapi::{
     shared::{minwindef::*, ntdef::*, windef::*},
     um::{processthreadsapi, psapi, winnt, winuser},
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 struct Item {
-    hwnd: i32,
+    hwnd: u32,
     left: i32,
     top: i32,
     width: i32,
     height: i32,
     title: String,
     name: String,
+    checked: bool,
 }
 
-impl fmt::Display for Item {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for Item {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
             "{:<8} ({:>4}, {:>4}, {:>4}, {:>4}) {:40} {:40}",
@@ -67,6 +67,7 @@ fn app(cx: Scope) -> Element {
         let width = use_state(&cx, || "0".to_string());
         let height = use_state(&cx, || "0".to_string());
         let items = LIST.iter().enumerate().map(|x| {
+			let id = format!("item_{}", x.0);
             rsx! {
                 tr {
 					onclick: move |_evt| {
@@ -76,7 +77,17 @@ fn app(cx: Scope) -> Element {
 						width.set(x.1.width.to_string());
 						height.set(x.1.height.to_string());
 					},
-                    td { style: "width: 12%;", x.1.hwnd.to_string() }
+                    td {
+						style: "width: 15%;",
+						input {
+							id: "{id}",
+							r#type: "checkbox",
+							checked: x.1.checked,
+							onchange: move |_| {
+							}
+						}
+						x.1.hwnd.to_string()
+					}
                     td { style: "width: 24%;", x.1.left.to_string(), ",", x.1.top.to_string(), ",", x.1.width.to_string(), ",", x.1.height.to_string() }
                     td { style: "width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", x.1.title.to_string() }
                     td { style: "width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", x.1.name.to_string() }
@@ -121,7 +132,16 @@ fn app(cx: Scope) -> Element {
                 table {
 					style: "width: 100%",
 					tr {
-						td { style: "width: 12%;", "句柄" }
+						td {
+							style: "width: 15%; text-align: left;",
+							input {
+								id: "toggle-all",
+								r#type: "checkbox",
+								onchange: move |_| {
+								}
+							}
+							label { r#for: "toggle-all", "句柄" }
+						}
 						td { style: "width: 24%;", "位置"}
 						td { style: "width: 30%;", "标题"}
 						td { style: "width: 24%;", "路径"}
@@ -164,13 +184,14 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
             let image_file_name = GetModuleFileNameExW(h_process);
 
             LIST.push(Item {
-                hwnd: hwnd as usize as i32,
+                hwnd: hwnd as usize as u32,
                 left: info.rcWindow.left,
                 top: info.rcWindow.top,
                 width: info.rcWindow.right - info.rcWindow.left,
                 height: info.rcWindow.bottom - info.rcWindow.top,
                 title: text.into_string().unwrap(),
                 name: image_file_name.into_string().unwrap(),
+                checked: false,
             });
         }
 
