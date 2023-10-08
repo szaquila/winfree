@@ -1,9 +1,13 @@
 use dioxus::prelude::*;
 use dioxus_desktop::{Config, LogicalSize, WindowBuilder};
-use std::{ffi::OsString, fmt, mem, os::windows::ffi::OsStringExt, ptr::null_mut};
+use std::{
+    collections::BTreeMap as Map, ffi::OsString, fmt, fs::File, mem, os::windows::ffi::OsStringExt,
+    path::Path, ptr::null_mut,
+};
 // use windows::Win32::{ Foundation::*, System::ProcessStatus::*, System::Threading::*, UI::WindowsAndMessaging::* };
 use fmt::{Display, Formatter, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::from_reader;
 use winapi::{
     shared::{minwindef::*, ntdef::*, windef::*},
     um::{processthreadsapi, psapi, winnt, winuser},
@@ -12,13 +16,13 @@ use winapi::{
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 struct Item {
     hwnd: u32,
+    title: String,
+    checked: bool,
     left: i32,
     top: i32,
     width: i32,
     height: i32,
-    title: String,
     name: String,
-    checked: bool,
 }
 
 impl Display for Item {
@@ -31,12 +35,28 @@ impl Display for Item {
     }
 }
 
-static mut LIST: Vec<Item> = Vec::new();
+const LEN: usize = 1024;
+const CFG_FILE: &str = "./config.json";
+static mut LIST: Option<Map<String, Item>> = None;
+static mut CFG: Option<Map<String, Item>> = None;
 static mut CX: i32 = 0;
 static mut CY: i32 = 0;
-const LEN: usize = 1024;
 
 fn main() {
+    unsafe {
+        CFG = Some(Map::new());
+        let path = Path::new(CFG_FILE);
+        if path.exists() {
+            let file = File::open(CFG_FILE).unwrap();
+            let cfg: Vec<Item> = from_reader(file).unwrap();
+            for item in cfg {
+                CFG.as_mut()
+                    .unwrap()
+                    .insert(item.name.clone(), item.clone());
+            }
+        }
+    }
+
     dioxus_desktop::launch_cfg(
         app,
         Config::default().with_window(
@@ -57,7 +77,7 @@ fn app(cx: Scope) -> Element {
         CX = winuser::GetSystemMetrics(winuser::SM_CXSCREEN);
         CY = winuser::GetSystemMetrics(winuser::SM_CYSCREEN);
 
-        LIST.clear();
+        LIST = Some(Map::new());
         let _ = winuser::EnumWindows(Some(enum_window), 0 as LPARAM);
         // println!("{:?}", LIST);
 
@@ -66,34 +86,37 @@ fn app(cx: Scope) -> Element {
         let top = use_state(&cx, || "0".to_string());
         let width = use_state(&cx, || "0".to_string());
         let height = use_state(&cx, || "0".to_string());
-        let items = LIST.iter().enumerate().map(|x| {
-			let id = format!("item_{}", x.0);
+        let mut items = Vec::new();
+        for (k, v) in LIST.as_ref().unwrap().iter() {
+            let id = format!("item_{}", k);
+            items.push(
             rsx! {
                 tr {
 					onclick: move |_evt| {
-						hwnd.set(x.1.hwnd.to_string());
-						left.set(x.1.left.to_string());
-						top.set(x.1.top.to_string());
-						width.set(x.1.width.to_string());
-						height.set(x.1.height.to_string());
+						hwnd.set(v.hwnd.to_string());
+						left.set(v.left.to_string());
+						top.set(v.top.to_string());
+						width.set(v.width.to_string());
+						height.set(v.height.to_string());
 					},
                     td {
 						style: "width: 15%;",
 						input {
 							id: "{id}",
 							r#type: "checkbox",
-							checked: x.1.checked,
+							checked: v.checked,
 							onchange: move |_| {
+
 							}
 						}
-						x.1.hwnd.to_string()
+						v.hwnd.to_string()
 					}
-                    td { style: "width: 24%;", x.1.left.to_string(), ",", x.1.top.to_string(), ",", x.1.width.to_string(), ",", x.1.height.to_string() }
-                    td { style: "width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", x.1.title.to_string() }
-                    td { style: "width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", x.1.name.to_string() }
+                    td { style: "width: 24%;", v.left.to_string(), ",", v.top.to_string(), ",", v.width.to_string(), ",", v.height.to_string() }
+                    td { style: "width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", v.title.to_string() }
+                    td { style: "width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", v.name.to_string() }
                 }
-            }
-        });
+			});
+        }
 
         cx.render(rsx! {
             // div {
@@ -116,7 +139,7 @@ fn app(cx: Scope) -> Element {
             //         "关闭"
             //     }
             // }
-			style { include_str!("./style.css") }
+			style { include_str!("./tailwind.css") }
 			div {
 				style: "width: 100%; height: 30px;display: inline-block; white-space: nowrap; display: flex; justify-content: center; align-items: center;",
 				input { style: "width: 22%;", placeholder: "左", value: "{left}", oninput: |evt| left.set(evt.value.clone()), }
@@ -131,22 +154,16 @@ fn app(cx: Scope) -> Element {
             div {
                 table {
 					style: "width: 100%",
+					class: "hover:table-fixed",
 					tr {
-						td {
-							style: "width: 15%; text-align: left;",
-							input {
-								id: "toggle-all",
-								r#type: "checkbox",
-								onchange: move |_| {
-								}
-							}
-							label { r#for: "toggle-all", "句柄" }
-						}
-						td { style: "width: 24%;", "位置"}
-						td { style: "width: 30%;", "标题"}
-						td { style: "width: 24%;", "路径"}
+						td { style: "width: 15%;", "句柄" }
+						td { style: "width: 24%;", "位置" }
+						td { style: "width: 30%;", "标题" }
+						td { style: "width: 24%;", "路径" }
 					}
-					items
+					for item in items {
+						item
+					}
                 }
             }
         })
@@ -182,17 +199,39 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
                 proc_id,
             );
             let image_file_name = GetModuleFileNameExW(h_process);
+            let name = image_file_name.into_string().unwrap();
 
-            LIST.push(Item {
-                hwnd: hwnd as usize as u32,
-                left: info.rcWindow.left,
-                top: info.rcWindow.top,
-                width: info.rcWindow.right - info.rcWindow.left,
-                height: info.rcWindow.bottom - info.rcWindow.top,
-                title: text.into_string().unwrap(),
-                name: image_file_name.into_string().unwrap(),
-                checked: false,
-            });
+            if CFG.as_ref().unwrap().contains_key(&name) {
+                let cfg = CFG.as_ref().unwrap().get(&name).unwrap();
+                LIST.as_mut().unwrap().insert(
+                    name.clone(),
+                    Item {
+                        hwnd: hwnd as u32,
+                        title: text.into_string().unwrap(),
+                        checked: true,
+                        left: cfg.left,
+                        top: cfg.top,
+                        width: cfg.width,
+                        height: cfg.height,
+                        name: name,
+                    },
+                );
+                let _ = winuser::MoveWindow(hwnd, cfg.left, cfg.top, cfg.width, cfg.height, 1);
+            } else {
+                LIST.as_mut().unwrap().insert(
+                    name.clone(),
+                    Item {
+                        hwnd: hwnd as u32,
+                        title: text.into_string().unwrap(),
+                        checked: false,
+                        left: info.rcWindow.left,
+                        top: info.rcWindow.top,
+                        width: info.rcWindow.right - info.rcWindow.left,
+                        height: info.rcWindow.bottom - info.rcWindow.top,
+                        name: name,
+                    },
+                );
+            }
         }
 
         true.into()
