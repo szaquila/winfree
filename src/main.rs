@@ -1,17 +1,32 @@
+// #![cfg_attr(
+//     all(not(debug_assertions), target_os = "windows"),
+//     windows_subsystem = "windows"
+// )]
+
 use dioxus::prelude::*;
-use dioxus_desktop::{Config, LogicalSize, WindowBuilder};
-use std::{
-    collections::BTreeMap as Map, ffi::OsString, fmt, fs::File, mem, os::windows::ffi::OsStringExt,
-    path::Path, ptr::null_mut,
+use dioxus_desktop::{
+    tao::platform::windows::WindowBuilderExtWindows, Config, LogicalSize, WindowBuilder,
 };
-// use windows::Win32::{ Foundation::*, System::ProcessStatus::*, System::Threading::*, UI::WindowsAndMessaging::* };
 use fmt::{Display, Formatter, Result};
+use platform_dirs::AppDirs;
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use serde_json::from_reader;
-use winapi::{
-    shared::{minwindef::*, ntdef::*, windef::*},
-    um::{processthreadsapi, psapi, winnt, winuser},
+use std::{
+    collections::BTreeMap as Map,
+    env, fmt,
+    fs::{create_dir_all, File, OpenOptions},
+    io::Write,
+    path::Path,
 };
+use tray_item::{IconSource, TrayItem};
+use windows::Win32::{
+    Foundation::*, System::ProcessStatus::*, System::Threading::*, UI::WindowsAndMessaging::*,
+};
+use winreg::{enums::*, RegKey};
+
+#[derive(RustEmbed)]
+#[folder = "./assets/"]
+struct Assets;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 struct Item {
@@ -35,87 +50,166 @@ impl Display for Item {
     }
 }
 
-const LEN: usize = 1024;
-const CFG_FILE: &str = "./config.json";
+const SAVED_FILE: &str = "winfree.json";
 static mut LIST: Option<Map<String, Item>> = None;
-static mut CFG: Option<Map<String, Item>> = None;
+static mut SAVED: Option<Map<String, Item>> = None;
 static mut CX: i32 = 0;
 static mut CY: i32 = 0;
+static mut ROWCLICK: bool = false;
+static mut HIDE: bool = true;
+static mut STARTUP: bool = false;
+static mut WIN: isize = 0;
+static mut EXE: String = String::new();
 
 fn main() {
-    unsafe {
-        CFG = Some(Map::new());
-        let path = Path::new(CFG_FILE);
-        if path.exists() {
-            let file = File::open(CFG_FILE).unwrap();
-            let cfg: Vec<Item> = from_reader(file).unwrap();
-            for item in cfg {
-                CFG.as_mut()
-                    .unwrap()
-                    .insert(item.name.clone(), item.clone());
+    load();
+
+    let mut tray = TrayItem::new("整理桌面", IconSource::Resource("main-icon")).unwrap();
+    tray.add_menu_item("显示/隐藏", || {
+        unsafe {
+            HIDE = !HIDE;
+            // WIN.set_visible(!HIDE);
+            if HIDE {
+                ShowWindow(HWND(WIN), SW_MINIMIZE);
+            } else {
+                ShowWindow(HWND(WIN), SW_RESTORE);
             }
-        }
-    }
+        };
+    })
+    .unwrap();
+    tray.inner_mut().add_separator().unwrap();
+    tray.add_menu_item("退出", || {
+        std::process::exit(0);
+    })
+    .unwrap();
 
     dioxus_desktop::launch_cfg(
         app,
-        Config::default().with_window(
-            WindowBuilder::new()
-                .with_title("桌面整理")
-                .with_resizable(false)
-                .with_inner_size(LogicalSize::new(640.0, 480.0)),
-        ),
+        Config::default()
+            // .with_custom_head(
+            //     r#"<link rel="stylesheet" href="assets/tailwind.css">"#.to_string(),
+            // )
+            .with_custom_index(
+                r#"
+				<!DOCTYPE html>
+				<html lang="zh-CN" class="dark h-full">
+					<head>
+						<title>Dioxus app</title>
+						<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+						<link rel="stylesheet" href="assets/tailwind.css">
+						<style>
+							input::-webkit-outer-spin-button,
+							input::-webkit-inner-spin-button {
+								-webkit-appearance: none;
+							}
+							input[type="number"] {
+								-moz-appearance: textfield;
+							}
+						</style>
+					</head>
+					<body class="m-0 p-0 h-full block overflow-x-hidden overflow-y-auto antialiased text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900">
+						<div id="main"></div>
+					</body>
+				</html>
+				"#
+                .into(),
+            )
+            .with_window(
+                WindowBuilder::new()
+                    .with_title("桌面整理")
+                    .with_resizable(false)
+					.with_minimizable(false)
+                    .with_skip_taskbar(true)
+                    .with_inner_size(LogicalSize::new(640.0, 480.0)),
+            ),
     );
 }
 
 fn app(cx: Scope) -> Element {
     unsafe {
-        // let win = dioxus_desktop::use_window(&cx);
-        // 我们将窗口设置为无边框的，然后我们可以自己实现标题栏。
-        // win.set_decorations(false);
-
-        CX = winuser::GetSystemMetrics(winuser::SM_CXSCREEN);
-        CY = winuser::GetSystemMetrics(winuser::SM_CYSCREEN);
+        CX = GetSystemMetrics(SM_CXSCREEN);
+        CY = GetSystemMetrics(SM_CYSCREEN);
 
         LIST = Some(Map::new());
-        let _ = winuser::EnumWindows(Some(enum_window), 0 as LPARAM);
+        let _ = EnumWindows(Some(enum_window), LPARAM(0));
         // println!("{:?}", LIST);
 
+		let window = dioxus_desktop::use_window(&cx);
+        // 我们将窗口设置为无边框的，然后我们可以自己实现标题栏。
+        // window.set_decorations(false);
+        // window.set_visible(!HIDE);
+		window.set_minimized(HIDE);
+
         let hwnd = use_state(&cx, || "0".to_string());
-        let left = use_state(&cx, || "0".to_string());
-        let top = use_state(&cx, || "0".to_string());
-        let width = use_state(&cx, || "0".to_string());
-        let height = use_state(&cx, || "0".to_string());
+        let title = use_state(&cx, || "0".to_string());
+        let checked = use_state(&cx, || "0".to_string());
+        let left = use_state(&cx, || "".to_string());
+        let top = use_state(&cx, || "".to_string());
+        let width = use_state(&cx, || "".to_string());
+        let height = use_state(&cx, || "".to_string());
+        let name = use_state(&cx, || "0".to_string());
         let mut items = Vec::new();
         for (k, v) in LIST.as_ref().unwrap().iter() {
-            let id = format!("item_{}", k);
+            let id = format!("id_{}", k);
             items.push(
             rsx! {
                 tr {
+					class: "odd:bg-stone-400 even:bg-slate-400 hover:bg-yellow-100",
 					onclick: move |_evt| {
+						let mut info = WINDOWINFO {
+							cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
+							..Default::default()
+						};
+						GetWindowInfo(HWND(v.hwnd as isize), &mut info).unwrap();
 						hwnd.set(v.hwnd.to_string());
-						left.set(v.left.to_string());
-						top.set(v.top.to_string());
-						width.set(v.width.to_string());
-						height.set(v.height.to_string());
+						title.set(v.title.to_string());
+						checked.set(v.checked.to_string());
+						left.set(info.rcWindow.left.to_string());
+						top.set(info.rcWindow.top.to_string());
+						width.set((info.rcWindow.right - info.rcWindow.left).to_string());
+						height.set((info.rcWindow.bottom - info.rcWindow.top).to_string());
+						name.set(v.name.to_string());
+						ROWCLICK = true;
 					},
                     td {
-						style: "width: 15%;",
+						class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
 						input {
 							id: "{id}",
+							name: "{id}",
 							r#type: "checkbox",
 							checked: v.checked,
 							onchange: move |_| {
 
 							}
 						}
-						v.hwnd.to_string()
+						label {
+							r#for: "{id}",
+							v.hwnd.to_string()
+						}
 					}
-                    td { style: "width: 24%;", v.left.to_string(), ",", v.top.to_string(), ",", v.width.to_string(), ",", v.height.to_string() }
-                    td { style: "width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", v.title.to_string() }
-                    td { style: "width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", v.name.to_string() }
+                    td {
+						class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
+						v.left.to_string(), ",", v.top.to_string(), ",", v.width.to_string(), ",", v.height.to_string()
+					}
+                    td {
+						class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
+						v.title.to_string()
+					}
+                    td {
+						class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
+						v.name.to_string()
+					}
                 }
 			});
+        }
+        let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (run, _disp) = hkcu.create_subkey(path).ok()?;
+        for (k, v) in run.enum_values().map(|x| x.unwrap()) {
+            // println!("{} = {:?}", k, v);
+            if k == "winfree" && v.to_string() == EXE.clone() {
+				STARTUP = true;
+            }
         }
 
         cx.render(rsx! {
@@ -139,47 +233,257 @@ fn app(cx: Scope) -> Element {
             //         "关闭"
             //     }
             // }
-			style { include_str!("./tailwind.css") }
+			// style { include_str!("./style.css") }
 			div {
-				style: "width: 100%; height: 30px;display: inline-block; white-space: nowrap; display: flex; justify-content: center; align-items: center;",
-				input { style: "width: 22%;", placeholder: "左", value: "{left}", oninput: |evt| left.set(evt.value.clone()), }
-				input { style: "width: 22%;", placeholder: "上", value: "{top}", oninput: |evt| top.set(evt.value.clone()),  }
-				input { style: "width: 22%;", placeholder: "宽", value: "{width}", oninput: |evt| width.set(evt.value.clone()),  }
-				input { style: "width: 22%;", placeholder: "高", value: "{height}", oninput: |evt| height.set(evt.value.clone()),  }
-				button { onclick: move |_| {
-					println!("当前值: {left} {top} {width} {height}");
-					let _ = winuser::MoveWindow(hwnd.parse::<isize>().unwrap() as HWND, left.parse::<i32>().unwrap(), top.parse::<i32>().unwrap(), width.parse::<i32>().unwrap(), height.parse::<i32>().unwrap(), 1);
-				}, "确定" }
+				class: "container w-full h-full bg-white dark:bg-slate-900 rounded-lg px-2 py-2 ring-1 ring-slate-900/5 shadow-xl",
+				// style: "padding: 5px;",
+				div {
+					class: "flex h-6 leading-6 align-middle",
+					// style: "width: 100%; height: 30px; margin-bottom: 10px; white-space: nowrap; display: flex; justify-content: center; align-items: center;",
+					input {
+						class: "w-1/6 mx-1.5 mb-2 px-1 py-1 bg-white dark:bg-slate-800 border shadow-sm border-slate-300 placeholder-slate-400 focus:outline-none focus:border-sky-500 focus:ring-sky-500 rounded-md sm:text-sm focus:ring-1",
+						// style: "width: 22%; margin-left: 5px;",
+						r#type: "number",
+						id: "id_left",
+						name: "id_left",
+						value: "{left}",
+						placeholder: "请输入左坐标",
+						oninput: |evt| left.set(evt.value.clone()),
+						// autofocus: "true",
+					}
+					input {
+						class: "w-1/6 mx-1.5 mb-2 px-1 py-1 bg-white dark:bg-slate-800 border shadow-sm border-slate-300 placeholder-slate-400 focus:outline-none focus:border-sky-500 focus:ring-sky-500 rounded-md sm:text-sm focus:ring-1",
+						// style: "width: 22%; margin-left: 5px;",
+						r#type: "number",
+						id: "id_top",
+						name: "id_top",
+						value: "{top}",
+						placeholder: "请输入上坐标",
+						oninput: |evt| top.set(evt.value.clone()),
+					}
+					input {
+						class: "w-1/6 mx-1.5 mb-2 px-1 py-1 bg-white dark:bg-slate-800 border shadow-sm border-slate-300 placeholder-slate-400 focus:outline-none focus:border-sky-500 focus:ring-sky-500 rounded-md sm:text-sm focus:ring-1",
+						// style: "width: 22%; margin-left: 5px;",
+						r#type: "number",
+						id: "id_width",
+						name: "id_width",
+						value: "{width}",
+						placeholder: "请输入宽度",
+						oninput: |evt| width.set(evt.value.clone()),
+					}
+					input {
+						class: "w-1/6 mx-1.5 mb-2 px-1 py-1 bg-white dark:bg-slate-800 border shadow-sm border-slate-300 placeholder-slate-400 focus:outline-none focus:border-sky-500 focus:ring-sky-500 rounded-md sm:text-sm focus:ring-1",
+						// style: "width: 22%; margin-left: 5px;",
+						r#type: "number",
+						id: "id_height",
+						name: "id_height",
+						value: "{height}",
+						placeholder: "请输入高度",
+						oninput: |evt| height.set(evt.value.clone()),
+					}
+					button {
+						class: "mx-1.5 mb-2 inline-flex items-center text-white bg-green-500 border-0 py-1 px-3 hover:bg-green-700 rounded",
+						// style: "margin-left: 5px; margin-right: 5px;",
+						onmousedown: |evt| evt.stop_propagation(),
+						onclick: move |_| {
+							// println!("当前值: {left} {top} {width} {height}");
+							let chwnd = hwnd.parse::<isize>().unwrap();
+							let ctitle = title.parse::<String>().unwrap();
+							if chwnd > 0 && !left.is_empty() && !top.is_empty() && !width.is_empty() && !height.is_empty() {
+								let cchecked = checked.parse::<bool>().unwrap();
+								let cleft = left.parse::<i32>().unwrap();
+								let ctop = top.parse::<i32>().unwrap();
+								let cwidth = width.parse::<i32>().unwrap();
+								let cheight = height.parse::<i32>().unwrap();
+								let cname = name.parse::<String>().unwrap();
+								if cchecked {
+									SAVED.as_mut().unwrap().insert(
+										cname.clone(),
+										Item {
+											hwnd: chwnd as u32,
+											title: ctitle,
+											checked: true,
+											left: cleft,
+											top: ctop,
+											width: cwidth,
+											height: cheight,
+											name: cname,
+										},
+									);
+									save();
+								}
+								let _ = MoveWindow(HWND(chwnd), cleft, ctop, cwidth, cheight, true);
+							}
+						},
+						"确定"
+					}
+					label {
+						class: "flex align-middle items-center",
+						r#for: "id_startup",
+						input {
+							r#type: "checkbox",
+							id: "id_startup",
+							name: "id_startup",
+							checked: "{STARTUP}",
+							onchange: move |evt| {
+								if evt.value.clone().parse::<bool>().unwrap() {
+									STARTUP = true;
+									let _ = run.set_value("winfree", &EXE);
+								} else {
+									STARTUP = false;
+									let _ = run.delete_value("winfree");
+								}
+							},
+						}
+						"开机启动"
+					}
+				}
+				div {
+					class: "object-contain",
+					table {
+						class: "table-fixed border-collapse w-full border-y border-slate-400 dark:border-slate-500 bg-white dark:bg-slate-800 text-sm shadow-sm",
+						caption {
+							class: "caption-bottom",
+							"当前桌面窗口列表"
+						}
+						tr {
+							class: "bg-slate-50 dark:bg-slate-700",
+							th {
+								class: "w-1/6 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
+								"句柄"
+							}
+							th {
+								class: "w-1/4 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
+								"位置"
+							}
+							th {
+								class: "w-1/3 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
+								"标题"
+							}
+							th {
+								class: "w-1/4 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
+								"路径"
+							}
+						}
+						for item in items {
+							item
+						}
+					}
+				}
 			}
-            div {
-                table {
-					style: "width: 100%",
-					class: "hover:table-fixed",
-					tr {
-						td { style: "width: 15%;", "句柄" }
-						td { style: "width: 24%;", "位置" }
-						td { style: "width: 30%;", "标题" }
-						td { style: "width: 24%;", "路径" }
-					}
-					for item in items {
-						item
-					}
+	})
+    }
+}
+
+pub fn stacks_icon(cx: Scope) -> Element {
+    cx.render(rsx!(
+        svg {
+            fill: "none",
+            stroke: "currentColor",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            stroke_width: "2",
+            class: "w-10 h-10 text-white p-2 bg-indigo-500 rounded-full",
+            view_box: "0 0 24 24",
+            path { d: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"}
+        }
+    ))
+}
+
+pub fn right_arrow_icon(cx: Scope) -> Element {
+    cx.render(rsx!(
+        svg {
+            fill: "none",
+            stroke: "currentColor",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            stroke_width: "2",
+            class: "w-4 h-4 ml-1",
+            view_box: "0 0 24 24",
+            path { d: "M5 12h14M12 5l7 7-7 7"}
+        }
+    ))
+}
+
+fn load() {
+    unsafe {
+        match env::current_exe() {
+            Ok(exe_path) => EXE = exe_path.to_str().unwrap().to_string(),
+            Err(e) => println!("failed to get current exe path: {e}"),
+        };
+
+        SAVED = Some(Map::new());
+        let app_dirs = AppDirs::new(Some(SAVED_FILE), true).unwrap();
+        // println!("{:?}", app_dirs);
+        let path = Path::new(&app_dirs.config_dir);
+        if path.exists() {
+            let reader = File::open(&app_dirs.config_dir).unwrap();
+            let items: Vec<Item> = serde_json::from_reader(reader).unwrap();
+            for item in items {
+                SAVED
+                    .as_mut()
+                    .unwrap()
+                    .insert(item.name.clone(), item.clone());
+            }
+        } else {
+            // println!("配置文件不存在，创建上级目录!");
+            let _ = create_dir_all(path.parent().unwrap());
+        }
+
+        let path = Path::new("assets/tailwind.css");
+        if !path.exists() {
+            let _ = create_dir_all(path.parent().unwrap());
+            let mut buffer = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open("./assets/tailwind.css")
+                .unwrap();
+            match Assets::get("tailwind.css") {
+                Some(assets) => {
+                    let _ = buffer.write_all(assets.data.as_ref());
+                }
+                None => {
+                    println!("get embed file error!")
                 }
             }
-        })
+        }
+    }
+}
+
+fn save() {
+    unsafe {
+        let app_dirs = AppDirs::new(Some(SAVED_FILE), true).unwrap();
+        let writer = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(&app_dirs.config_dir)
+            .unwrap();
+
+        let mut items = Vec::new();
+        for (_k, v) in SAVED.as_ref().unwrap().iter() {
+            items.push(v);
+        }
+        let _ = serde_json::to_writer_pretty(writer, &items);
     }
 }
 
 unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
     unsafe {
-        let text = GetWindowTextW(hwnd);
-        // let text = String::from_utf16_lossy(&text[..len as usize]);
+        let mut text = [0; 512];
+        let len = GetWindowTextW(hwnd, &mut text);
+        let text = String::from_utf16_lossy(&text[..len as usize]);
 
-        let info = GetWindowInfo(hwnd);
+        let mut info = WINDOWINFO {
+            cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
+            ..Default::default()
+        };
+        GetWindowInfo(hwnd, &mut info).unwrap();
 
         if !text.is_empty()
-            // && info.dwStyle.contains(winuser::WS_VISIBLE)
-			&& (info.dwStyle & winuser::WS_VISIBLE) > 0
+            && info.dwStyle.contains(WS_VISIBLE)
+			// && (info.dwStyle & WS_VISIBLE) > 0
             && !(info.rcWindow.left == 0 && (info.rcWindow.right - info.rcWindow.left) == CX)
         {
             // println!(
@@ -192,132 +496,58 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
             //     text.clone(),
             // );
 
-            let (_, proc_id) = GetWindowThreadProcessId(hwnd);
-            let h_process = OpenProcess(
-                winnt::PROCESS_TERMINATE | winnt::PROCESS_QUERY_INFORMATION,
-                0,
+            let mut proc_id = 0u32;
+            let mut name = "".to_string();
+            let _ = GetWindowThreadProcessId(hwnd, Some(&mut proc_id));
+            match OpenProcess(
+                PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION,
+                false,
                 proc_id,
-            );
-            let image_file_name = GetModuleFileNameExW(h_process);
-            let name = image_file_name.into_string().unwrap();
-
-            if CFG.as_ref().unwrap().contains_key(&name) {
-                let cfg = CFG.as_ref().unwrap().get(&name).unwrap();
-                LIST.as_mut().unwrap().insert(
-                    name.clone(),
-                    Item {
-                        hwnd: hwnd as u32,
-                        title: text.into_string().unwrap(),
-                        checked: true,
-                        left: cfg.left,
-                        top: cfg.top,
-                        width: cfg.width,
-                        height: cfg.height,
-                        name: name,
-                    },
-                );
-                let _ = winuser::MoveWindow(hwnd, cfg.left, cfg.top, cfg.width, cfg.height, 1);
-            } else {
-                LIST.as_mut().unwrap().insert(
-                    name.clone(),
-                    Item {
-                        hwnd: hwnd as u32,
-                        title: text.into_string().unwrap(),
-                        checked: false,
-                        left: info.rcWindow.left,
-                        top: info.rcWindow.top,
-                        width: info.rcWindow.right - info.rcWindow.left,
-                        height: info.rcWindow.bottom - info.rcWindow.top,
-                        name: name,
-                    },
-                );
+            ) {
+                Ok(h_process) => {
+                    let mut cname = [0; 512];
+                    let len = GetModuleFileNameExW(h_process, HMODULE(0), &mut cname);
+                    name = String::from_utf16_lossy(&cname[..len as usize]);
+                    if name.clone() == EXE.clone() {
+                        WIN = hwnd.0;
+                    }
+                }
+                Err(err) => {
+                    println!("错误：{}", err);
+                }
             }
+
+            let mut checked = false;
+            let mut left = info.rcWindow.left;
+            let mut top = info.rcWindow.top;
+            let mut width = info.rcWindow.right - info.rcWindow.left;
+            let mut height = info.rcWindow.bottom - info.rcWindow.top;
+            if SAVED.as_ref().unwrap().contains_key(&name) {
+                checked = true;
+                if !ROWCLICK {
+                    let saved = SAVED.as_ref().unwrap().get(&name).unwrap();
+                    left = saved.left;
+                    top = saved.top;
+                    width = saved.width;
+                    height = saved.height;
+                    let _ = MoveWindow(hwnd, left, top, width, height, true);
+                }
+            }
+            LIST.as_mut().unwrap().insert(
+                name.clone(),
+                Item {
+                    hwnd: hwnd.0 as u32,
+                    title: text.into(),
+                    checked,
+                    left,
+                    top,
+                    width,
+                    height,
+                    name: name.into(),
+                },
+            );
         }
 
         true.into()
     }
-}
-
-fn slice_to_os_string_trancate_nul(text: &[u16]) -> OsString {
-    if let Some(new_len) = text.iter().position(|x| *x == 0) {
-        OsString::from_wide(&text[0..new_len])
-    } else {
-        OsString::from_wide(&text)
-    }
-}
-
-///
-#[allow(dead_code)]
-#[allow(non_snake_case)]
-fn GetForegroundWindow() -> HWND {
-    unsafe { winuser::GetForegroundWindow() }
-}
-
-/// returns `OsString`, nul char is truncated.
-#[allow(dead_code)]
-#[allow(non_snake_case)]
-fn GetWindowTextW(hwnd: HWND) -> OsString {
-    let text_len = unsafe { winuser::GetWindowTextLengthW(hwnd) };
-    // println!("text_len: {}", text_len);
-
-    let mut text = vec![0u16; (text_len + 1) as usize];
-    unsafe {
-        winuser::GetWindowTextW(hwnd, text.as_mut_ptr(), text_len + 1);
-    }
-    slice_to_os_string_trancate_nul(&text)
-}
-
-#[allow(dead_code)]
-#[allow(non_snake_case)]
-fn GetWindowInfo(hwnd: HWND) -> winuser::WINDOWINFO {
-    let mut info: winuser::WINDOWINFO = unsafe { mem::zeroed() };
-    let _ok = unsafe { winuser::GetWindowInfo(hwnd, &mut info) };
-    info
-}
-
-/// returns `(thread_id, proc_id)`
-#[allow(dead_code)]
-#[allow(non_snake_case)]
-fn GetWindowThreadProcessId(hwnd: HWND) -> (DWORD, DWORD) {
-    let mut proc_id: DWORD = 0;
-    let thread_id = unsafe { winuser::GetWindowThreadProcessId(hwnd, &mut proc_id) };
-    (thread_id, proc_id)
-}
-
-/// returns process handle.
-#[allow(dead_code)]
-#[allow(non_snake_case)]
-fn OpenProcess(dwDesiredAccess: DWORD, bInheritHandle: BOOL, dwProcessId: DWORD) -> HANDLE {
-    unsafe { processthreadsapi::OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId) }
-}
-
-/// returns `OsString`, nul char is truncated.
-#[allow(dead_code)]
-#[allow(non_snake_case)]
-fn GetProcessImageFileNameW(hProcess: HANDLE) -> OsString {
-    let mut image_file_name = vec![0u16; LEN];
-    let _ = unsafe {
-        psapi::GetProcessImageFileNameW(
-            hProcess,
-            image_file_name.as_mut_ptr(),
-            image_file_name.len() as u32,
-        )
-    };
-    slice_to_os_string_trancate_nul(&image_file_name)
-}
-
-/// returns `OsString`, nul char is truncated.
-#[allow(dead_code)]
-#[allow(non_snake_case)]
-fn GetModuleFileNameExW(hProcess: HANDLE) -> OsString {
-    let mut image_file_name = vec![0u16; LEN];
-    let _ = unsafe {
-        psapi::GetModuleFileNameExW(
-            hProcess,
-            null_mut(),
-            image_file_name.as_mut_ptr(),
-            image_file_name.len() as u32,
-        )
-    };
-    slice_to_os_string_trancate_nul(&image_file_name)
 }

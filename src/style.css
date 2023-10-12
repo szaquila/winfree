@@ -1,8 +1,11 @@
+html {
+	height: 100%;
+}
 body {
-	margin: 5px;
-	padding: 5px;
+	margin: 0;
+	padding: 0;
+	height: 100%;
 	display: block;
-	height: 430px;
 	overflow-x: hidden;
 	overflow-y: auto;
 }
