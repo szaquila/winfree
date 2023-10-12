@@ -1,7 +1,7 @@
-// #![cfg_attr(
-//     all(not(debug_assertions), target_os = "windows"),
-//     windows_subsystem = "windows"
-// )]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 use dioxus::prelude::*;
 use dioxus_desktop::{
@@ -178,8 +178,8 @@ fn app(cx: Scope) -> Element {
 							name: "{id}",
 							r#type: "checkbox",
 							checked: v.checked,
-							onchange: move |_| {
-
+							onchange: move |evt| {
+								checked.set(evt.value.clone().parse::<String>().unwrap());
 							}
 						}
 						label {
@@ -205,9 +205,9 @@ fn app(cx: Scope) -> Element {
         let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (run, _disp) = hkcu.create_subkey(path).ok()?;
-        for (k, v) in run.enum_values().map(|x| x.unwrap()) {
+        for (k, _v) in run.enum_values().map(|x| x.unwrap()) {
             // println!("{} = {:?}", k, v);
-            if k == "winfree" && v.to_string() == EXE.clone() {
+            if k == "winfree" { // && v.to_string() == EXE.clone() {
 				STARTUP = true;
             }
         }
