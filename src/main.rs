@@ -56,7 +56,7 @@ static mut SAVED: Option<Map<String, Item>> = None;
 static mut CX: i32 = 0;
 static mut CY: i32 = 0;
 static mut ROWCLICK: bool = false;
-static mut HIDE: bool = true;
+static mut HIDE: bool = false;
 static mut STARTUP: bool = false;
 static mut WIN: isize = 0;
 static mut EXE: String = String::new();
@@ -107,7 +107,7 @@ fn main() {
 							}
 						</style>
 					</head>
-					<body class="m-0 p-0 h-full block overflow-x-hidden overflow-y-auto antialiased text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900">
+					<body class="m-0 p-0 antialiased text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900">
 						<div id="main"></div>
 					</body>
 				</html>
@@ -148,61 +148,8 @@ fn app(cx: Scope) -> Element {
         let width = use_state(&cx, || "".to_string());
         let height = use_state(&cx, || "".to_string());
         let name = use_state(&cx, || "0".to_string());
-        let mut items = Vec::new();
-        for (k, v) in LIST.as_ref().unwrap().iter() {
-            let id = format!("id_{}", k);
-            items.push(
-            rsx! {
-                tr {
-					class: "odd:bg-stone-400 even:bg-slate-400 hover:bg-yellow-100",
-					onclick: move |_evt| {
-						let mut info = WINDOWINFO {
-							cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
-							..Default::default()
-						};
-						GetWindowInfo(HWND(v.hwnd as isize), &mut info).unwrap();
-						hwnd.set(v.hwnd.to_string());
-						title.set(v.title.to_string());
-						checked.set(v.checked.to_string());
-						left.set(info.rcWindow.left.to_string());
-						top.set(info.rcWindow.top.to_string());
-						width.set((info.rcWindow.right - info.rcWindow.left).to_string());
-						height.set((info.rcWindow.bottom - info.rcWindow.top).to_string());
-						name.set(v.name.to_string());
-						ROWCLICK = true;
-					},
-                    td {
-						class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
-						input {
-							id: "{id}",
-							name: "{id}",
-							r#type: "checkbox",
-							checked: v.checked,
-							onchange: move |evt| {
-								checked.set(evt.value.clone().parse::<String>().unwrap());
-							}
-						}
-						label {
-							r#for: "{id}",
-							v.hwnd.to_string()
-						}
-					}
-                    td {
-						class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
-						v.left.to_string(), ",", v.top.to_string(), ",", v.width.to_string(), ",", v.height.to_string()
-					}
-                    td {
-						class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
-						v.title.to_string()
-					}
-                    td {
-						class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-500 dark:text-slate-400",
-						v.name.to_string()
-					}
-                }
-			});
-        }
-        let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+		let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (run, _disp) = hkcu.create_subkey(path).ok()?;
         for (k, _v) in run.enum_values().map(|x| x.unwrap()) {
@@ -238,7 +185,7 @@ fn app(cx: Scope) -> Element {
 				class: "container w-full h-full bg-white dark:bg-slate-900 rounded-lg px-2 py-2 ring-1 ring-slate-900/5 shadow-xl",
 				// style: "padding: 5px;",
 				div {
-					class: "flex h-6 leading-6 align-middle",
+					class: "flex h-8 leading-6 align-middle",
 					// style: "width: 100%; height: 30px; margin-bottom: 10px; white-space: nowrap; display: flex; justify-content: center; align-items: center;",
 					input {
 						class: "w-1/6 mx-1.5 mb-2 px-1 py-1 bg-white dark:bg-slate-800 border shadow-sm border-slate-300 placeholder-slate-400 focus:outline-none focus:border-sky-500 focus:ring-sky-500 rounded-md sm:text-sm focus:ring-1",
@@ -339,34 +286,102 @@ fn app(cx: Scope) -> Element {
 					}
 				}
 				div {
-					class: "object-contain",
 					table {
-						class: "table-fixed border-collapse w-full border-y border-slate-400 dark:border-slate-500 bg-white dark:bg-slate-800 text-sm shadow-sm",
+						class: "table-fixed border-collapse w-full border border-slate-400 dark:border-slate-500 bg-white dark:bg-slate-600 text-sm shadow-sm",
 						caption {
-							class: "caption-bottom",
-							"当前桌面窗口列表"
+							class: "caption-top",
+							"桌面窗口列表"
 						}
-						tr {
-							class: "bg-slate-50 dark:bg-slate-700",
-							th {
-								class: "w-1/6 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
-								"句柄"
-							}
-							th {
-								class: "w-1/4 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
-								"位置"
-							}
-							th {
-								class: "w-1/3 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
-								"标题"
-							}
-							th {
-								class: "w-1/4 border border-slate-300 dark:border-slate-600 p-1.5 font-semibold text-slate-900 dark:text-slate-200 text-left",
-								"路径"
+						thead {
+							tr {
+								class: "bg-slate-200 dark:bg-slate-800",
+								th {
+									class: "w-1/6 border border-slate-300 dark:border-slate-600 font-semibold p-1.5 text-slate-900 dark:text-slate-200 text-left",
+									"句柄"
+								}
+								th {
+									class: "w-1/4 border border-slate-300 dark:border-slate-600 font-semibold p-1.5 text-slate-900 dark:text-slate-200 text-left",
+									"位置"
+								}
+								th {
+									class: "w-1/3 border border-slate-300 dark:border-slate-600 font-semibold p-1.5 text-slate-900 dark:text-slate-200 text-left",
+									"标题"
+								}
+								th {
+									class: "w-1/4 border border-slate-300 dark:border-slate-600 font-semibold p-1.5 text-slate-900 dark:text-slate-200 text-left",
+									"路径"
+								}
 							}
 						}
-						for item in items {
-							item
+						tbody {
+							for (k, v) in LIST.as_ref().unwrap().iter() {
+								tr {
+									class: "odd:bg-slate-500 even:bg-slate-600 hover:bg-yellow-100",
+									onclick: move |_evt| {
+										let mut info = WINDOWINFO {
+											cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
+											..Default::default()
+										};
+										GetWindowInfo(HWND(v.hwnd as isize), &mut info).unwrap();
+										hwnd.set(v.hwnd.to_string());
+										title.set(v.title.to_string());
+										checked.set(v.checked.to_string());
+										left.set(info.rcWindow.left.to_string());
+										top.set(info.rcWindow.top.to_string());
+										width.set((info.rcWindow.right - info.rcWindow.left).to_string());
+										height.set((info.rcWindow.bottom - info.rcWindow.top).to_string());
+										name.set(v.name.to_string());
+										ROWCLICK = true;
+									},
+									td {
+										class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+										input {
+											id: "id_{k}",
+											name: "id_{k}",
+											r#type: "checkbox",
+											checked: v.checked,
+											onchange: move |evt| {
+												if evt.value.clone().parse::<bool>().unwrap() {
+													checked.set("1".to_string());
+													SAVED.as_mut().unwrap().insert(
+														v.name.clone(),
+														Item {
+															hwnd: v.hwnd as u32,
+															title: v.title.clone(),
+															checked: true,
+															left: v.left,
+															top: v.top,
+															width: v.width,
+															height: v.height,
+															name: v.name.clone(),
+														},
+													);
+												} else {
+													checked.set("0".to_string());
+													SAVED.as_mut().unwrap().remove(&v.name.clone());
+												}
+												save();
+											}
+										}
+										label {
+											r#for: "id_{k}",
+											v.hwnd.to_string()
+										}
+									}
+									td {
+										class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+										v.left.to_string(), ",", v.top.to_string(), ",", v.width.to_string(), ",", v.height.to_string()
+									}
+									td {
+										class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+										v.title.to_string()
+									}
+									td {
+										class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+										v.name.to_string()
+									}
+								}
+							}
 						}
 					}
 				}
