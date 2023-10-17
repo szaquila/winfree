@@ -288,10 +288,6 @@ fn app(cx: Scope) -> Element {
 				div {
 					table {
 						class: "table-fixed border-collapse w-full border border-slate-400 dark:border-slate-500 bg-white dark:bg-slate-600 text-sm shadow-sm",
-						caption {
-							class: "caption-top",
-							"桌面窗口列表"
-						}
 						thead {
 							tr {
 								class: "bg-slate-200 dark:bg-slate-800",
@@ -318,6 +314,17 @@ fn app(cx: Scope) -> Element {
 								tr {
 									class: "odd:bg-slate-500 even:bg-slate-600 hover:bg-yellow-100",
 									onclick: move |_evt| {
+										hwnd.set(v.hwnd.to_string());
+										title.set(v.title.to_string());
+										checked.set(v.checked.to_string());
+										left.set(v.left.to_string());
+										top.set(v.top.to_string());
+										width.set(v.width.to_string());
+										height.set(v.height.to_string());
+										name.set(v.name.to_string());
+										ROWCLICK = true;
+									},
+									ondblclick: move |_evt| {
 										let mut info = WINDOWINFO {
 											cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
 											..Default::default()
@@ -331,7 +338,6 @@ fn app(cx: Scope) -> Element {
 										width.set((info.rcWindow.right - info.rcWindow.left).to_string());
 										height.set((info.rcWindow.bottom - info.rcWindow.top).to_string());
 										name.set(v.name.to_string());
-										ROWCLICK = true;
 									},
 									td {
 										class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
@@ -539,12 +545,12 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
             let mut height = info.rcWindow.bottom - info.rcWindow.top;
             if SAVED.as_ref().unwrap().contains_key(&name) {
                 checked = true;
-                if !ROWCLICK {
-                    let saved = SAVED.as_ref().unwrap().get(&name).unwrap();
-                    left = saved.left;
-                    top = saved.top;
-                    width = saved.width;
-                    height = saved.height;
+				let saved = SAVED.as_ref().unwrap().get(&name).unwrap();
+				left = saved.left;
+				top = saved.top;
+				width = saved.width;
+				height = saved.height;
+				if !ROWCLICK {
                     let _ = MoveWindow(hwnd, left, top, width, height, true);
                 }
             }
