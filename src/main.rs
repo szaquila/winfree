@@ -74,10 +74,16 @@ fn main() {
             } else {
                 ShowWindow(HWND(WIN), SW_RESTORE);
             }
-        };
+        }
     })
     .unwrap();
     tray.inner_mut().add_separator().unwrap();
+    tray.add_menu_item("刷新", || unsafe {
+        ROWCLICK = false;
+        LIST = Some(Map::new());
+        let _ = EnumWindows(Some(enum_window), LPARAM(0));
+    })
+    .unwrap();
     tray.add_menu_item("退出", || {
         std::process::exit(0);
     })
@@ -118,7 +124,7 @@ fn main() {
                 WindowBuilder::new()
                     .with_title("桌面整理")
                     .with_resizable(false)
-					.with_minimizable(false)
+                    .with_minimizable(false)
                     .with_skip_taskbar(true)
                     .with_inner_size(LogicalSize::new(640.0, 480.0)),
             ),
@@ -134,11 +140,11 @@ fn app(cx: Scope) -> Element {
         let _ = EnumWindows(Some(enum_window), LPARAM(0));
         // println!("{:?}", LIST);
 
-		let window = dioxus_desktop::use_window(&cx);
+        let window = dioxus_desktop::use_window(&cx);
         // 我们将窗口设置为无边框的，然后我们可以自己实现标题栏。
         // window.set_decorations(false);
         // window.set_visible(!HIDE);
-		window.set_minimized(HIDE);
+        window.set_minimized(HIDE);
 
         let hwnd = use_state(&cx, || "0".to_string());
         let title = use_state(&cx, || "0".to_string());
@@ -149,13 +155,14 @@ fn app(cx: Scope) -> Element {
         let height = use_state(&cx, || "".to_string());
         let name = use_state(&cx, || "0".to_string());
 
-		let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (run, _disp) = hkcu.create_subkey(path).ok()?;
         for (k, _v) in run.enum_values().map(|x| x.unwrap()) {
             // println!("{} = {:?}", k, v);
-            if k == "winfree" { // && v.to_string() == EXE.clone() {
-				STARTUP = true;
+            if k == "winfree" {
+                // && v.to_string() == EXE.clone() {
+                STARTUP = true;
             }
         }
 
@@ -545,12 +552,12 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
             let mut height = info.rcWindow.bottom - info.rcWindow.top;
             if SAVED.as_ref().unwrap().contains_key(&name) {
                 checked = true;
-				let saved = SAVED.as_ref().unwrap().get(&name).unwrap();
-				left = saved.left;
-				top = saved.top;
-				width = saved.width;
-				height = saved.height;
-				if !ROWCLICK {
+                let saved = SAVED.as_ref().unwrap().get(&name).unwrap();
+                left = saved.left;
+                top = saved.top;
+                width = saved.width;
+                height = saved.height;
+                if !ROWCLICK {
                     let _ = MoveWindow(hwnd, left, top, width, height, true);
                 }
             }
