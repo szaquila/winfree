@@ -321,17 +321,6 @@ fn app(cx: Scope) -> Element {
 								tr {
 									class: "odd:bg-slate-500 even:bg-slate-600 hover:bg-yellow-100",
 									onclick: move |_evt| {
-										hwnd.set(v.hwnd.to_string());
-										title.set(v.title.to_string());
-										checked.set(v.checked.to_string());
-										left.set(v.left.to_string());
-										top.set(v.top.to_string());
-										width.set(v.width.to_string());
-										height.set(v.height.to_string());
-										name.set(v.name.to_string());
-										ROWCLICK = true;
-									},
-									ondblclick: move |_evt| {
 										let mut info = WINDOWINFO {
 											cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
 											..Default::default()
@@ -345,6 +334,19 @@ fn app(cx: Scope) -> Element {
 										width.set((info.rcWindow.right - info.rcWindow.left).to_string());
 										height.set((info.rcWindow.bottom - info.rcWindow.top).to_string());
 										name.set(v.name.to_string());
+									},
+									ondblclick: move |_evt| {
+										let _ = MoveWindow(HWND(v.hwnd as isize), v.left, v.top, v.width, v.height, true);
+
+										hwnd.set(v.hwnd.to_string());
+										title.set(v.title.to_string());
+										checked.set(v.checked.to_string());
+										left.set(v.left.to_string());
+										top.set(v.top.to_string());
+										width.set(v.width.to_string());
+										height.set(v.height.to_string());
+										name.set(v.name.to_string());
+										ROWCLICK = true;
 									},
 									td {
 										class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
