@@ -8,13 +8,28 @@ edition = "2021"
 [dependencies]
 dioxus = "0.4.0"
 dioxus-desktop = "0.4.0"
+error-chain = "0.12.4"
+futures = "0.3.29"
+futures-channel = "0.3.29"
 image = "0.24.7"
 padlock = "0.2.0"
 platform-dirs = "0.3.0"
 rust-embed = "8.0.0"
 serde = "1.0.188"
 serde_json = "1.0.107"
+time = { version = "0.3.30", features = ["macros"] }
 tokio = { version = "1.32.0", features = ["full"] }
+tracing = "0.1.40"
+tracing-appender = "0.2.3"
+tracing-error = "0.2.0"
+tracing-subscriber = { version = "0.3.18", default-features = false, features = [
+	"ansi",
+	"json",
+	"env-filter",
+	"local-time",
+	"registry",
+	"time",
+] }
 tray-item = { version = "0.9.0" }
 # winapi = { version = "0.3.9", features = [
 # 	"psapi",
@@ -22,7 +37,7 @@ tray-item = { version = "0.9.0" }
 # 	"wincon",
 # 	"winuser",
 # ] }
-windows = { version = "0.51.1", features = [
+windows = { version = "0.52.0", features = [
 	"Win32_Foundation",
 	"Win32_Graphics_Gdi",
 	# "Win32_System_Console",
@@ -34,14 +49,14 @@ windows = { version = "0.51.1", features = [
 	"Win32_UI_Shell",
 	"Win32_UI_WindowsAndMessaging",
 ] }
-winreg = "0.51.0"
+winreg = "0.52.0"
 
 [build-dependencies]
 # slint-build = "1.2.1"
 windres = "0.2.2"
 
 # [build]
-# rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-fuse-ld=lld"]
+# rustflags = ["-C", "target-cpu=native", "-C", "link-arg=-fuse-ld=lld", "-Z", "threads=4"]
 
 [profile.release]
 codegen-units = 1

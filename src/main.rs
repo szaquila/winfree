@@ -1,28 +1,38 @@
-#![cfg_attr(
-    all(not(debug_assertions), target_os = "windows"),
-    windows_subsystem = "windows"
-)]
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use dioxus::prelude::*;
 use dioxus_desktop::{
-    tao::platform::windows::WindowBuilderExtWindows, Config, LogicalSize, WindowBuilder,
+    tao::platform::windows::WindowBuilderExtWindows,
+    Config,
+    LogicalSize,
+    WindowBuilder,
 };
-use fmt::{Display, Formatter, Result};
+// use futures::StreamExt;
+// use futures_channel::mpsc::{ unbounded, UnboundedReceiver, UnboundedSender };
 use platform_dirs::AppDirs;
 use rust_embed::RustEmbed;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use std::{
+    // cell::Cell,
     collections::BTreeMap as Map,
-    env, fmt,
-    fs::{create_dir_all, File, OpenOptions},
+    env,
+    fmt::{ Display, Formatter, Result },
+    fs::{ create_dir_all, File, OpenOptions },
     io::Write,
     path::Path,
 };
-use tray_item::{IconSource, TrayItem};
+use time::{ macros::format_description, UtcOffset };
+use tracing::info;
+use tracing_appender::{ non_blocking, rolling };
+use tracing_subscriber::{ EnvFilter, fmt, layer::SubscriberExt, Registry };
+use tray_item::{ IconSource, TrayItem };
 use windows::Win32::{
-    Foundation::*, System::ProcessStatus::*, System::Threading::*, UI::WindowsAndMessaging::*,
+    Foundation::*,
+    System::ProcessStatus::*,
+    System::Threading::*,
+    UI::WindowsAndMessaging::*,
 };
-use winreg::{enums::*, RegKey};
+// use winreg::{ enums::*, RegKey };
 
 #[derive(RustEmbed)]
 #[folder = "./assets/"]
@@ -45,7 +55,13 @@ impl Display for Item {
         write!(
             f,
             "{:<8} ({:>4}, {:>4}, {:>4}, {:>4}) {:40} {:40}",
-            self.hwnd, self.left, self.top, self.width, self.height, self.title, self.name
+            self.hwnd,
+            self.left,
+            self.top,
+            self.width,
+            self.height,
+            self.title,
+            self.name
         )
     }
 }
@@ -62,6 +78,41 @@ static mut WIN: isize = 0;
 static mut EXE: String = String::new();
 
 fn main() {
+    let offset = UtcOffset::from_hms(8, 0, 0).unwrap();
+    let formater = format_description!(
+        "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"
+    );
+    let local_time = fmt::time::OffsetTime::new(offset, formater);
+    let formater = fmt
+        ::format()
+        .with_level(true)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_timer(local_time)
+        .compact();
+
+    // 输出到文件中
+    let file_appender = rolling::never("logs", "app.log");
+    let (non_blocking_appender, _guard) = non_blocking(file_appender);
+    // 输出到控制台中
+    let (std_non_blocking, _guard) = non_blocking(std::io::stdout());
+    let env_filter = EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into());
+    let formatting_layer = fmt::Layer
+        ::default()
+        .with_writer(std_non_blocking)
+        .event_format(formater.clone())
+        .pretty();
+    let file_layer = fmt::Layer
+        ::default()
+        .with_ansi(false)
+        .with_writer(non_blocking_appender)
+        .event_format(formater);
+    // 注册
+    let logger = Registry::default().with(env_filter).with(formatting_layer).with(file_layer);
+    tracing::subscriber::set_global_default(logger).unwrap();
+
+    info!("Starting...");
+
     load();
 
     let mut tray = TrayItem::new("整理桌面", IconSource::Resource("main-icon")).unwrap();
@@ -75,22 +126,33 @@ fn main() {
                 ShowWindow(HWND(WIN), SW_RESTORE);
             }
         }
-    })
-    .unwrap();
+    }).unwrap();
     tray.inner_mut().add_separator().unwrap();
-    tray.add_menu_item("刷新", || unsafe {
-        ROWCLICK = false;
-        LIST = Some(Map::new());
-        let _ = EnumWindows(Some(enum_window), LPARAM(0));
-    })
-    .unwrap();
+    // tray.add_menu_item("刷新", || unsafe {
+    //     ROWCLICK = false;
+    //     LIST = Some(Map::new());
+    //     let _ = EnumWindows(Some(enum_window), LPARAM(0));
+    // }).unwrap();
     tray.add_menu_item("退出", || {
         std::process::exit(0);
-    })
-    .unwrap();
+    }).unwrap();
+
+    // let (sender, receiver) = unbounded();
+
+    // let other = sender.clone();
+
+    // // launch our initial background scan in a thread
+    // std::thread::spawn(move || {
+    //     let _ = other.unbounded_send(Status::Scanning);
+    //     let _ = other.unbounded_send(perform_scan());
+    // });
 
     dioxus_desktop::launch_cfg(
         app,
+        // AppProps {
+        //     sender: Cell::new(Some(sender)),
+        //     receiver: Cell::new(Some(receiver)),
+        // },
         Config::default()
             // .with_custom_head(
             //     r#"<link rel="stylesheet" href="assets/tailwind.css">"#.to_string(),
@@ -117,8 +179,7 @@ fn main() {
 						<div id="main"></div>
 					</body>
 				</html>
-				"#
-                .into(),
+				"#.into()
             )
             .with_window(
                 WindowBuilder::new()
@@ -126,13 +187,57 @@ fn main() {
                     .with_resizable(false)
                     .with_minimizable(false)
                     .with_skip_taskbar(true)
-                    .with_inner_size(LogicalSize::new(640.0, 480.0)),
-            ),
+                    .with_inner_size(LogicalSize::new(640.0, 480.0))
+            )
     );
 }
 
+// fn perform_scan() -> Status {
+//     unsafe {
+//         CX = GetSystemMetrics(SM_CXSCREEN);
+//         CY = GetSystemMetrics(SM_CYSCREEN);
+
+//         LIST = Some(Map::new());
+//         if let Ok(_v) = EnumWindows(Some(enum_window), LPARAM(0)) {
+//             // println!("{:?}", LIST);
+
+//             if let Some(devices) = &LIST {
+//                 if !devices.is_empty() {
+//                     return Status::Found(devices.clone());
+//                 }
+//             }
+//         }
+//         Status::NoneFound
+//     }
+// }
+
+// enum Status {
+//     NoneFound,
+//     Scanning,
+//     Found(Map<String, Item>),
+// }
+
+// struct AppProps {
+//     sender: Cell<Option<UnboundedSender<Status>>>,
+//     receiver: Cell<Option<UnboundedReceiver<Status>>>,
+// }
+
 fn app(cx: Scope) -> Element {
     unsafe {
+        // let status = use_state(cx, || Status::NoneFound);
+
+        // let _ = use_coroutine(cx, |_: UnboundedReceiver<()>| {
+        //     let receiver = cx.props.receiver.take();
+        //     let status = status.to_owned();
+        //     async move {
+        //         if let Some(mut receiver) = receiver {
+        //             while let Some(msg) = receiver.next().await {
+        //                 status.set(msg);
+        //             }
+        //         }
+        //     }
+        // });
+
         CX = GetSystemMetrics(SM_CXSCREEN);
         CY = GetSystemMetrics(SM_CYSCREEN);
 
@@ -155,18 +260,19 @@ fn app(cx: Scope) -> Element {
         let height = use_state(&cx, || "".to_string());
         let name = use_state(&cx, || "0".to_string());
 
-        let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let (run, _disp) = hkcu.create_subkey(path).ok()?;
-        for (k, _v) in run.enum_values().map(|x| x.unwrap()) {
-            // println!("{} = {:?}", k, v);
-            if k == "winfree" {
-                // && v.to_string() == EXE.clone() {
-                STARTUP = true;
-            }
-        }
+        // let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        // let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        // let (run, _disp) = hkcu.create_subkey(path).ok()?;
+        // for (k, _v) in run.enum_values().map(|x| x.unwrap()) {
+        //     // println!("{} = {:?}", k, v);
+        //     if k == "winfree" {
+        //         // && v.to_string() == EXE.clone() {
+        //         STARTUP = true;
+        //     }
+        // }
 
-        cx.render(rsx! {
+        cx.render(
+            rsx! {
             // div {
             //     class: "titlebar",
             //     style: "background-color: black; color: white; padding: 0; text-align: right;",
@@ -282,16 +388,33 @@ fn app(cx: Scope) -> Element {
 							onchange: move |evt| {
 								if evt.value.clone().parse::<bool>().unwrap() {
 									STARTUP = true;
-									let _ = run.set_value("winfree", &EXE);
+									// let _ = run.set_value("winfree", &EXE);
 								} else {
 									STARTUP = false;
-									let _ = run.delete_value("winfree");
+									// let _ = run.delete_value("winfree");
 								}
 							},
 						}
 						"开机启动"
 					}
+					// button {
+					// 	class: "mx-1.5 mb-2 inline-flex items-center text-white bg-indigo-500 hover:bg-indigo-600 border-0 py-1 px-3 rounded",
+                    //     onclick: move |_| {
+                    //         let sender = cx.props.sender.take();
+                    //         std::thread::spawn( || {
+                    //         if let Some(sender) = sender {
+                    //                 let _ = sender.unbounded_send(Status::Scanning);
+                    //                 let _ = sender.unbounded_send(perform_scan());
+                    //             }
+                    //         });
+                    //     },
+                    //     match status.get() {
+                    //         Status::Scanning => "Scanning",
+                    //         _ => "Scan",
+                    //     }
+                    // }
 				}
+
 				div {
 					table {
 						class: "table-fixed border-collapse w-full border border-slate-400 dark:border-slate-500 bg-white dark:bg-slate-600 text-sm shadow-sm",
@@ -316,97 +439,113 @@ fn app(cx: Scope) -> Element {
 								}
 							}
 						}
-						tbody {
-							for (k, v) in LIST.as_ref().unwrap().iter() {
-								tr {
-									class: "odd:bg-slate-500 even:bg-slate-600 hover:bg-yellow-100",
-									onclick: move |_evt| {
-										let mut info = WINDOWINFO {
-											cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
-											..Default::default()
-										};
-										GetWindowInfo(HWND(v.hwnd as isize), &mut info).unwrap();
-										hwnd.set(v.hwnd.to_string());
-										title.set(v.title.to_string());
-										checked.set(v.checked.to_string());
-										left.set(info.rcWindow.left.to_string());
-										top.set(info.rcWindow.top.to_string());
-										width.set((info.rcWindow.right - info.rcWindow.left).to_string());
-										height.set((info.rcWindow.bottom - info.rcWindow.top).to_string());
-										name.set(v.name.to_string());
-									},
-									ondblclick: move |_evt| {
-										let _ = MoveWindow(HWND(v.hwnd as isize), v.left, v.top, v.width, v.height, true);
 
-										hwnd.set(v.hwnd.to_string());
-										title.set(v.title.to_string());
-										checked.set(v.checked.to_string());
-										left.set(v.left.to_string());
-										top.set(v.top.to_string());
-										width.set(v.width.to_string());
-										height.set(v.height.to_string());
-										name.set(v.name.to_string());
-										ROWCLICK = true;
-									},
-									td {
-										class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
-										input {
-											id: "id_{k}",
-											name: "id_{k}",
-											r#type: "checkbox",
-											checked: v.checked,
-											onchange: move |evt| {
-												if evt.value.clone().parse::<bool>().unwrap() {
-													checked.set("1".to_string());
-													SAVED.as_mut().unwrap().insert(
-														v.name.clone(),
-														Item {
-															hwnd: v.hwnd as u32,
-															title: v.title.clone(),
-															checked: true,
-															left: v.left,
-															top: v.top,
-															width: v.width,
-															height: v.height,
-															name: v.name.clone(),
-														},
-													);
-												} else {
-													checked.set("0".to_string());
-													SAVED.as_mut().unwrap().remove(&v.name.clone());
+						// match status.get() {
+						// 	Status::Scanning =>  rsx!(""),
+						// 	Status::NoneFound => rsx!("No windows found. Try scanning again"),
+						// 	Status::Found(_devices) => {
+						// 		rsx!(
+									tbody {
+									for (k, v) in LIST.as_ref().unwrap().iter() {
+										tr {
+											class: "odd:bg-slate-500 even:bg-slate-600 hover:bg-yellow-100",
+											onclick: move |_evt| {
+												let mut win_info = WINDOWINFO {
+													cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
+													..Default::default()
+												};
+												if let Ok(_v) = GetWindowInfo(HWND(v.hwnd as isize), &mut win_info) {
 												}
-												save();
+												hwnd.set(v.hwnd.to_string());
+												title.set(v.title.to_string());
+												checked.set(v.checked.to_string());
+												left.set(win_info.rcWindow.left.to_string());
+												top.set(win_info.rcWindow.top.to_string());
+												width.set((win_info.rcWindow.right - win_info.rcWindow.left).to_string());
+												height.set((win_info.rcWindow.bottom - win_info.rcWindow.top).to_string());
+												name.set(v.name.to_string());
+											},
+											ondblclick: move |_evt| {
+												let mut win_info = WINDOWINFO {
+													cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
+													..Default::default()
+												};
+												if let Ok(_v) = GetWindowInfo(HWND(v.hwnd as isize), &mut win_info) {
+													let _ = MoveWindow(HWND(v.hwnd as isize), v.left, v.top, v.width, v.height, true);
+												}
+												hwnd.set(v.hwnd.to_string());
+												title.set(v.title.to_string());
+												checked.set(v.checked.to_string());
+												left.set(v.left.to_string());
+												top.set(v.top.to_string());
+												width.set(v.width.to_string());
+												height.set(v.height.to_string());
+												name.set(v.name.to_string());
+												ROWCLICK = true;
+										},
+											td {
+												class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+												input {
+													id: "id_{k}",
+													name: "id_{k}",
+													r#type: "checkbox",
+													checked: v.checked,
+													onchange: move |evt| {
+														if evt.value.clone().parse::<bool>().unwrap() {
+															checked.set("1".to_string());
+															SAVED.as_mut().unwrap().insert(
+																v.name.clone(),
+																Item {
+																	hwnd: v.hwnd as u32,
+																	title: v.title.clone(),
+																	checked: true,
+																	left: v.left,
+																	top: v.top,
+																	width: v.width,
+																	height: v.height,
+																	name: v.name.clone(),
+																},
+															);
+														} else {
+															checked.set("0".to_string());
+															SAVED.as_mut().unwrap().remove(&v.name.clone());
+														}
+														save();
+													}
+												}
+												label {
+													r#for: "id_{k}",
+													v.hwnd.to_string()
+												}
+											}
+											td {
+												class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+												v.left.to_string(), ",", v.top.to_string(), ",", v.width.to_string(), ",", v.height.to_string()
+											}
+											td {
+												class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+												v.title.to_string()
+											}
+											td {
+												class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
+												v.name.to_string()
 											}
 										}
-										label {
-											r#for: "id_{k}",
-											v.hwnd.to_string()
-										}
-									}
-									td {
-										class: "border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
-										v.left.to_string(), ",", v.top.to_string(), ",", v.width.to_string(), ",", v.height.to_string()
-									}
-									td {
-										class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
-										v.title.to_string()
-									}
-									td {
-										class: "overflow-hidden text-ellipsis whitespace-nowrap border border-slate-300 dark:border-slate-700 p-1 text-slate-400",
-										v.name.to_string()
 									}
 								}
-							}
-						}
+							// )
+							// }
 					}
 				}
 			}
-	})
-    }
+		})
+	}
 }
 
+
 pub fn stacks_icon(cx: Scope) -> Element {
-    cx.render(rsx!(
+    cx.render(
+        rsx!(
         svg {
             fill: "none",
             stroke: "currentColor",
@@ -417,11 +556,13 @@ pub fn stacks_icon(cx: Scope) -> Element {
             view_box: "0 0 24 24",
             path { d: "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"}
         }
-    ))
+    )
+    )
 }
 
 pub fn right_arrow_icon(cx: Scope) -> Element {
-    cx.render(rsx!(
+    cx.render(
+        rsx!(
         svg {
             fill: "none",
             stroke: "currentColor",
@@ -432,15 +573,18 @@ pub fn right_arrow_icon(cx: Scope) -> Element {
             view_box: "0 0 24 24",
             path { d: "M5 12h14M12 5l7 7-7 7"}
         }
-    ))
+    )
+    )
 }
 
 fn load() {
     unsafe {
         match env::current_exe() {
-            Ok(exe_path) => EXE = exe_path.to_str().unwrap().to_string(),
-            Err(e) => println!("failed to get current exe path: {e}"),
-        };
+            Ok(exe_path) => {
+                EXE = exe_path.to_str().unwrap().to_string();
+            }
+            Err(e) => info!("failed to get current exe path: {e}"),
+        }
 
         SAVED = Some(Map::new());
         let app_dirs = AppDirs::new(Some(SAVED_FILE), true).unwrap();
@@ -450,10 +594,7 @@ fn load() {
             let reader = File::open(&app_dirs.config_dir).unwrap();
             let items: Vec<Item> = serde_json::from_reader(reader).unwrap();
             for item in items {
-                SAVED
-                    .as_mut()
-                    .unwrap()
-                    .insert(item.name.clone(), item.clone());
+                SAVED.as_mut().unwrap().insert(item.name.clone(), item.clone());
             }
         } else {
             // println!("配置文件不存在，创建上级目录!");
@@ -474,7 +615,7 @@ fn load() {
                     let _ = buffer.write_all(assets.data.as_ref());
                 }
                 None => {
-                    println!("get embed file error!")
+                    info!("get embed file error!");
                 }
             }
         }
@@ -505,35 +646,32 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
         let len = GetWindowTextW(hwnd, &mut text);
         let text = String::from_utf16_lossy(&text[..len as usize]);
 
-        let mut info = WINDOWINFO {
+        let mut win_info = WINDOWINFO {
             cbSize: core::mem::size_of::<WINDOWINFO>() as u32,
             ..Default::default()
         };
-        GetWindowInfo(hwnd, &mut info).unwrap();
+        GetWindowInfo(hwnd, &mut win_info).unwrap();
 
-        if !text.is_empty()
-            && info.dwStyle.contains(WS_VISIBLE)
-			// && (info.dwStyle & WS_VISIBLE) > 0
-            && !(info.rcWindow.left == 0 && (info.rcWindow.right - info.rcWindow.left) == CX)
+        if
+            !text.is_empty() &&
+            win_info.dwStyle.contains(WS_VISIBLE) &&
+            // && (win_info.dwStyle & WS_VISIBLE) > 0
+            !(win_info.rcWindow.left == 0 && win_info.rcWindow.right - win_info.rcWindow.left == CX)
         {
             // println!(
             //     "{:<8} ({:>4}, {:>4}, {:>4}, {:>4}) {:40}",
             //     window.clone().0,
-            //     info.rcWindow.left,
-            //     info.rcWindow.top,
-            //     info.rcWindow.right - info.rcWindow.left,
-            //     info.rcWindow.bottom - info.rcWindow.top,
+            //     win_info.rcWindow.left,
+            //     win_info.rcWindow.top,
+            //     win_info.rcWindow.right - win_info.rcWindow.left,
+            //     win_info.rcWindow.bottom - win_info.rcWindow.top,
             //     text.clone(),
             // );
 
             let mut proc_id = 0u32;
             let mut name = "".to_string();
             let _ = GetWindowThreadProcessId(hwnd, Some(&mut proc_id));
-            match OpenProcess(
-                PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION,
-                false,
-                proc_id,
-            ) {
+            match OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, false, proc_id) {
                 Ok(h_process) => {
                     let mut cname = [0; 512];
                     let len = GetModuleFileNameExW(h_process, HMODULE(0), &mut cname);
@@ -548,10 +686,10 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
             }
 
             let mut checked = false;
-            let mut left = info.rcWindow.left;
-            let mut top = info.rcWindow.top;
-            let mut width = info.rcWindow.right - info.rcWindow.left;
-            let mut height = info.rcWindow.bottom - info.rcWindow.top;
+            let mut left = win_info.rcWindow.left;
+            let mut top = win_info.rcWindow.top;
+            let mut width = win_info.rcWindow.right - win_info.rcWindow.left;
+            let mut height = win_info.rcWindow.bottom - win_info.rcWindow.top;
             if SAVED.as_ref().unwrap().contains_key(&name) {
                 checked = true;
                 let saved = SAVED.as_ref().unwrap().get(&name).unwrap();
@@ -563,9 +701,9 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
                     let _ = MoveWindow(hwnd, left, top, width, height, true);
                 }
             }
-            LIST.as_mut().unwrap().insert(
-                name.clone(),
-                Item {
+            LIST.as_mut()
+                .unwrap()
+                .insert(name.clone(), Item {
                     hwnd: hwnd.0 as u32,
                     title: text.into(),
                     checked,
@@ -574,8 +712,7 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
                     width,
                     height,
                     name: name.into(),
-                },
-            );
+                });
         }
 
         true.into()
