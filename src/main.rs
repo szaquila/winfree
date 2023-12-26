@@ -698,7 +698,26 @@ unsafe extern "system" fn enum_window(hwnd: HWND, _: LPARAM) -> BOOL {
                 width = saved.width;
                 height = saved.height;
                 if !ROWCLICK {
-                    let _ = MoveWindow(hwnd, left, top, width, height, true);
+					if LIST.as_mut().unwrap().contains_key(&name) {
+						if left < CX / 2 {
+							if top < CY / 2 {
+								// 左上角
+								top += height;
+							} else {
+								// 左下角
+								top -= height;
+							}
+						} else {
+							if top < CY / 2 {
+								// 右上角
+								top += height;
+							} else {
+								// 右下角
+								top -= height;
+							}
+						}
+					}
+					let _ = MoveWindow(hwnd, left, top, width, height, true);
                 }
             }
             LIST.as_mut()

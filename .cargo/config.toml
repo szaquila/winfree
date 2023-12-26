@@ -1,0 +1,47 @@
+[build]
+# rustc-wrapper = '/usr/local/rust/.cargo/bin/sccache.9'
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+	'-Clink-arg=-fuse-ld=mold',
+	# '-Zcodegen-backend=cranelift'
+]
+linker = 'clang'
+
+[target.x86_64-pc-windows-msvc]
+# rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/DEBUG:NONE","--cfg", "tokio_unstable"]
+#  rustflags = [ "--cfg", "tokio_unstable"]
+# rustflags = [ "-C", "link-arg=/DEBUG:NONE"]
+rustflags = ['-Zshare-generics=off']
+# linker = 'rust-lld.exe'
+
+[target.x86_64-apple-darwin]
+rustflags = [
+	'-Clink-arg=-fuse-ld=/usr/local/bin/zld',
+	'-Zshare-generics=y',
+	'-Csplit-debuginfo=unpacked',
+]
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ['-Clink-arg=-fuse-ld=mold', '-Ctarget-feature=+crt-static']
+linker = '/usr/bin/musl-clang'
+# rustflags = ["-C", "linker-flavor=gcc", "-C", "link-self-contained=no"]
+# linker = "musl-zcxx"
+
+[profile.dev]
+opt-level = 1
+debug = 2
+incremental = true
+codegen-units = 512
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 'z'
+lto = true
+debug = false
+incremental = false
+codegen-units = 1
+panic = 'abort'
+# strip = "symbols" # none(false) debuginfo symbols(true).
